@@ -1,3 +1,7 @@
+Forked for my own use, pair code 1234, colors changes, custom logo and some extra gauges. works for my cyd 2.8 tft resistive. Online flash tool is for the original not mine.
+
+
+
 # ESP32-Bluetooth-OBD2-Gauge
 
 ## This repository has been archived and is no longer maintained. (October 24th, 2025)
