@@ -194,7 +194,7 @@ void updateFirmwareWIFI() {
     txt = "IP Address: "+ WiFi.softAPIP().toString();
     Serial.println(txt);
     tft.drawString(txt,0,140,4);  
-    tft.setTextColor(TFT_BLACK,TFT_WHITE);
+    tft.setTextColor(TFT_WHITE,TFT_BLACK);
     tft.drawCentreString("[- Press button to exit -]",159,215,4);  
     while (digitalRead(SELECTOR_PIN) == HIGH) {//wait for button press to exit       
       autoDim();
@@ -301,7 +301,7 @@ void updateFromFS(fs::FS &fs) {
 /*------------------*/
 void updateFirmwareSD() {
   tft.fillRect(0,30,320,239,TFT_BLACK);
-  tft.setTextColor(TFT_BLACK,TFT_WHITE);
+  tft.setTextColor(TFT_WHITE,TFT_BLACK);
   tft.drawCentreString("[- Press button to exit -]",159,215,4);  
    if(!SD.begin()) {//sdcard not attach
     Serial.println(F("Micro SD Card not mounted!"));

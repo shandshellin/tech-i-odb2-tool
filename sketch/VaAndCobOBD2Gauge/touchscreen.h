@@ -22,6 +22,21 @@ uint16_t touchCalibration_x0 = 300, touchCalibration_x1 = 3600, touchCalibration
 uint8_t  touchCalibration_rotate = 1, touchCalibration_invert_x = 2, touchCalibration_invert_y = 0;
 long _pressTime;
 
+enum TouchNavigationAction {
+  TOUCH_NAV_NONE,
+  TOUCH_NAV_PREVIOUS,
+  TOUCH_NAV_SELECT,
+  TOUCH_NAV_NEXT
+};
+
+const uint16_t TOUCH_NAV_LEFT_END = 63;
+const uint16_t TOUCH_NAV_CENTER_END = 255;
+bool touchNavigationHeld = false;
+uint16_t touchRawX = 0;
+uint16_t touchRawY = 0;
+uint16_t touchCalibratedX = 0;
+uint16_t touchCalibratedY = 0;
+
 //------------------------------------------------------------------------------------------
 //load calibration data
 void setTouch(uint16_t *parameters){
@@ -159,7 +174,7 @@ void touch_calibrate() {//calibrate touch screen
   if (SPIFFS.exists(CALIBRATION_FILE)) {
       File f = SPIFFS.open(CALIBRATION_FILE, "r");
       if (f) {
-        if (f.readBytes((char *)calData, 14) == 14)
+        if (f.readBytes((char *)calData, sizeof(calData)) == sizeof(calData))
           calDataOK = 1;
         f.close();
       }//if f
@@ -167,6 +182,10 @@ void touch_calibrate() {//calibrate touch screen
 //if can read calibrate data from spiffs file AND button not push
   if (calDataOK && (digitalRead(SELECTOR_PIN) == HIGH)) {
     setTouch(calData); // calibration data valid
+    Serial.printf("Touch calibration loaded: x=%u+%u y=%u+%u flags=%u\n",
+                  touchCalibration_x0, touchCalibration_x1,
+                  touchCalibration_y0, touchCalibration_y1,
+                  calData[4]);
   } else {
     // data not valid  or press button during start
     Serial.println(F("Touch screen calibration..."));
@@ -186,7 +205,7 @@ void touch_calibrate() {//calibrate touch screen
     SPIFFS.remove(CALIBRATION_FILE);//Delete if we want to re-calibrate
     File f = SPIFFS.open(CALIBRATION_FILE, "w");   // store data
     if (f) {
-      f.write((const unsigned char *)calData, 14);
+      f.write((const unsigned char *)calData, sizeof(calData));
       f.close();
     }//if f
    }//else calDataOK
@@ -196,13 +215,11 @@ void touch_calibrate() {//calibrate touch screen
 //--------------------------
 //get touch point 
 bool getTouch(uint16_t *x, uint16_t *y) {
-  int threshold;
-
   if (ts.touched()) {
     TS_Point p = ts.getPoint();
-    uint16_t x_tmp = p.x, y_tmp = p.y, xx, yy;
+    uint16_t x_tmp = p.x, y_tmp = p.y;
+    int32_t xx, yy;
 
-    if (_pressTime > millis()) threshold=20;
     uint8_t n = 5;
     uint8_t valid = 0;
     while (n--)
@@ -214,28 +231,49 @@ bool getTouch(uint16_t *x, uint16_t *y) {
 
   //compensate
   if(!touchCalibration_rotate){
-    xx=(x_tmp-touchCalibration_x0)*_width/touchCalibration_x1;
-    yy=(y_tmp-touchCalibration_y0)*_height/touchCalibration_y1;
+    xx=((int32_t)x_tmp-touchCalibration_x0)*_width/touchCalibration_x1;
+    yy=((int32_t)y_tmp-touchCalibration_y0)*_height/touchCalibration_y1;
     if(touchCalibration_invert_x)
       xx = _width - xx;
     if(touchCalibration_invert_y)
       yy = _height - yy;
   } else {
-    xx=(y_tmp-touchCalibration_x0)*_width/touchCalibration_x1;
-    yy=(x_tmp-touchCalibration_y0)*_height/touchCalibration_y1;
+    xx=((int32_t)y_tmp-touchCalibration_x0)*_width/touchCalibration_x1;
+    yy=((int32_t)x_tmp-touchCalibration_y0)*_height/touchCalibration_y1;
     if(touchCalibration_invert_x)
       xx = _width - xx;
     if(touchCalibration_invert_y)
       yy = _height - yy;
   }
-    
-    if (xx >= _width || yy >= _height) return false;//out of window  
-    *x = xx;
-    *y = yy;
+
+    xx = constrain(xx, 0, _width - 1);
+    yy = constrain(yy, 0, _height - 1);
+    touchRawX = x_tmp;
+    touchRawY = y_tmp;
+    touchCalibratedX = xx;
+    touchCalibratedY = yy;
+    *x = (uint16_t)xx;
+    *y = (uint16_t)yy;
     return true;
   } else {
     return false;
   }
+}
+//--------------------------
+TouchNavigationAction getTouchNavigationAction() {
+  uint16_t x = 0;
+  uint16_t y = 0;
+  if (!getTouch(&x, &y)) {
+    touchNavigationHeld = false;
+    return TOUCH_NAV_NONE;
+  }
+
+  if (touchNavigationHeld) return TOUCH_NAV_NONE;
+  touchNavigationHeld = true;
+
+  if (x <= TOUCH_NAV_LEFT_END) return TOUCH_NAV_PREVIOUS;
+  if (x <= TOUCH_NAV_CENTER_END) return TOUCH_NAV_SELECT;
+  return TOUCH_NAV_NEXT;
 }
 //--------------------------
 void testTouch() {//for test touch screen

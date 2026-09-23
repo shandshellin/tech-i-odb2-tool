@@ -157,6 +157,12 @@ bool press = false;                                                    // button
 bool showsystem = false;                                               //show fps and temp EEPROM 0x01
 uint8_t pidRead = 0;                                                   //counter that hold number of pids been read to check pid/sec
 String serial_no = "";                                                 //keep serial no.
+const uint32_t dashboardConfigHoldDuration = 3000;
+const uint32_t dashboardTouchSampleGap = 150;
+uint32_t dashboardCenterTouchStartedAt = 0;
+uint32_t dashboardLastTouchAt = 0;
+bool dashboardCenterTouchTriggered = false;
+bool dashboardTouchActive = false;
 
 //CPU Temp
 const uint8_t tempOverheat = 60;       //max operating cpu temp 60c
@@ -176,8 +182,10 @@ uint8_t btDeviceCount = 0;                                                  //di
 esp_bd_addr_t client_addr = { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };         //obdII mac addr
 esp_bd_addr_t recent_client_addr = { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };  //keep last btaddr in RTC memory
 const String client_name = "OBDII";                                         //adaptor name to search
-esp_spp_sec_t sec_mask = ESP_SPP_SEC_NONE;                                  // or ESP_SPP_SEC_ENCRYPT|ESP_SPP_SEC_AUTHENTICATE to request pincode confirmation
-esp_spp_role_t role = ESP_SPP_ROLE_SLAVE;                                   // or ESP_SPP_ROLE_MASTER
+const String client_mac = "00:0D:18:B0:04:59";                              //CBT OBDII adaptor address
+const char obd2_pin[] = "1234";                                             //OBDII adaptor pairing PIN
+esp_spp_sec_t sec_mask = ESP_SPP_SEC_AUTHENTICATE;                          //request PIN authentication when connecting
+esp_spp_role_t role = ESP_SPP_ROLE_MASTER;                                  //gauge initiates the connection to the adaptor
 bool foundOBD2 = false;
 BluetoothSerial BTSerial;  //bluetooth serial device
 
@@ -318,7 +326,11 @@ void setup() {
   //testTouch();//test touchscreen
 
   tft.setSwapBytes(true);  //to display correct image color
-  show_spiffs_jpeg_image("/vaandcob.jpg", 0, 0);// display logo image
+  tft.fillScreen(TFT_BLACK);
+  tft.setTextColor(TFT_NAVY, TFT_BLACK);
+  tft.setTextSize(3);
+  tft.drawCentreString("FORD", 159, 81, 4);
+  tft.setTextSize(1);
   delay(3000);
 
   //backlight ledcAttachPin must be set after tft.init()
@@ -329,9 +341,9 @@ void setup() {
   }
   digitalWrite(LED_RED_PIN, HIGH);  //red off
   tft.fillScreen(TFT_BLACK);        //show start page
-  tft.fillRectVGradient(0, 0, 320, 26, TFT_YELLOW, 0x8400);
-  tft.setTextColor(TFT_BLACK);
-  tft.pushImage(0, 0, 320, 25, obd2gauge);  //show logo
+  tft.fillRectVGradient(0, 0, 320, 26, TFT_BLUE, TFT_NAVY);
+  tft.setTextColor(TFT_WHITE);
+  tft.drawCentreString("Tech-i ODB2 Tool", 159, 5, 2);
   ledcWrite(backlightChannel, 255);         //full bright
   tft.setTextColor(TFT_WHITE, TFT_RED);
   tft.drawRightString("   Config button ->", 319, 26, 2);
@@ -374,13 +386,19 @@ recent_client_addr : {0x00,0x00,0x00,0x00,0x00,0x00} array of bytes[6]
     Serial.println(F("Bluetooth..OK"));
     Terminal("Bluetooth..OK", 0, 48, 320, 191);
   }
+  BTSerial.setPin(obd2_pin);
+  BTSerial.onAuthComplete([](boolean success) {
+    Serial.printf("OBDII pairing %s\n", success ? "succeeded" : "failed");
+  });
   runtime = millis();
 #ifdef SKIP_CONNECTION
   foundOBD2 = true;
 #endif
 
   //Connect to ELM327
-  connectLastOBDII();   //try connect last BT
+  if (hasValidBtAddress(recent_client_addr)) {
+    connectLastOBDII();  //try the saved BT address
+  }
   while (!foundOBD2) {  //not success try scan and connect another OBD2
     scanBTdevice();
     autoDim();  //auto backlight handle
@@ -389,7 +407,7 @@ recent_client_addr : {0x00,0x00,0x00,0x00,0x00,0x00} array of bytes[6]
       if (!press) {
         press = true;                          //set flag
         holdtime = millis();                   //set timer
-      } else if (holdtime - millis() > 500) {  //press once and longer
+      } else if (millis() - holdtime > 500) {  //press once and longer
         configMenu();                          //open config menu
         press = false;                         //reset flag
       }                                        //else if holdtimer > 30000
@@ -429,13 +447,37 @@ recent_client_addr : {0x00,0x00,0x00,0x00,0x00,0x00} array of bytes[6]
 }  //setup
 
 /*###################################*/
+void changeLayout(int8_t direction) {
+  int8_t nextLayout = layout + direction;
+  if (nextLayout < 0) nextLayout = max_layout - 1;
+  if (nextLayout >= max_layout) nextLayout = 0;
+  layout = nextLayout;
+
+  ledcWriteTone(buzzerChannel, 5000);
+  delay(5);
+  ledcWriteTone(buzzerChannel, 0);
+  initScreen();
+  for (uint8_t i = 0; i < maxpidIndex - 1; i++) old_data[i] = 0.0;
+  engine_off_count = 0;
+  BTSerial.flush();
+  while (BTSerial.available() > 0) {
+    BTSerial.read();
+  }
+  bt_message = "";
+  skip = false;
+  pidIndex = maxpidIndex - 1;
+  prompt = true;
+}
+
 void loop() {
   //SCAN BUTON (button press HOLD to config menu)
   if (digitalRead(SELECTOR_PIN) == LOW) {  //button pressed
     if (!press) {
       press = true;                           //set flag
       holdtime = millis();                    //set timer
-    } else if (holdtime - millis() > 3000) {  //press once and longer than 3 sec
+      Serial.println(F("Dashboard physical button pressed."));
+    } else if (millis() - holdtime > 3000) {  //press once and longer than 3 sec
+      Serial.println(F("Dashboard physical button: Configuration."));
       configMenu();                           //open config menu
       press = false;                          //reset flag
       if (foundOBD2) initScreen();            //open new layout screen
@@ -443,29 +485,58 @@ void loop() {
     delay(200);                               //delay avoid bounce
   } else {                                    //button release
     if (press) {                              //change layout next page
-      layout++;                               //change to next layout page
-      if (layout == max_layout) layout = 0;
-      ledcWriteTone(buzzerChannel, 5000);  //play click sound
-      delay(5);
-      ledcWriteTone(buzzerChannel, 0);
-      initScreen();  //open meter screen
-                     //reset variable
-      for (uint8_t i = 0; i < maxpidIndex - 1; i++) old_data[i] = 0.0;
-      engine_off_count = 0;
-      BTSerial.flush();                   //clear tx
-      while (BTSerial.available() > 0) {  //clear rx buffer
-        BTSerial.read();
-      }
-      bt_message = "";
-      skip = false;
-      pidIndex = maxpidIndex - 1;  //will be +1 to be 0
+      Serial.println(F("Dashboard physical button: next layout."));
+      changeLayout(1);
       press = false;               //reset flag
-      prompt = true;               //to trig reading elm again
       delay(200);                  //delay avoid bounce
 
     }  //if press
 
   }  //else digitalRead
+  uint16_t touchX = 0;
+  uint16_t touchY = 0;
+  uint32_t now = millis();
+  if (getTouch(&touchX, &touchY)) {
+    dashboardLastTouchAt = now;
+    if (touchX > TOUCH_NAV_LEFT_END && touchX <= TOUCH_NAV_CENTER_END) {
+      if (!dashboardTouchActive) {
+        Serial.printf("Dashboard touch raw=%u,%u calibrated=%u,%u zone=CENTER action=hold-start\n",
+                      touchRawX, touchRawY, touchCalibratedX, touchCalibratedY);
+      }
+      dashboardTouchActive = true;
+    if (dashboardCenterTouchStartedAt == 0) {
+      dashboardCenterTouchStartedAt = now;
+      dashboardCenterTouchTriggered = false;
+      Serial.println(F("Dashboard center hold started."));
+    } else if (!dashboardCenterTouchTriggered && now - dashboardCenterTouchStartedAt >= dashboardConfigHoldDuration) {
+      dashboardCenterTouchTriggered = true;
+      Serial.println(F("Dashboard center hold accepted."));
+      configMenu();
+      if (foundOBD2) initScreen();
+    }
+    } else {
+      if (dashboardCenterTouchStartedAt != 0) Serial.println(F("Dashboard center hold cancelled: zone changed."));
+      bool wasTouchActive = dashboardTouchActive;
+      dashboardTouchActive = true;
+    dashboardCenterTouchStartedAt = 0;
+    dashboardCenterTouchTriggered = false;
+      if (!wasTouchActive) {
+      const bool previous = touchX <= TOUCH_NAV_LEFT_END;
+      Serial.printf("Dashboard touch raw=%u,%u calibrated=%u,%u zone=%s action=%s-layout\n",
+                    touchRawX, touchRawY, touchCalibratedX, touchCalibratedY,
+                    previous ? "LEFT" : "RIGHT", previous ? "previous" : "next");
+      changeLayout(previous ? -1 : 1);
+    }
+    }
+  } else if (dashboardTouchActive && now - dashboardLastTouchAt > dashboardTouchSampleGap) {
+    if (dashboardCenterTouchStartedAt != 0 && !dashboardCenterTouchTriggered) {
+      Serial.println(F("Dashboard center hold cancelled: touch released."));
+    }
+    dashboardTouchActive = false;
+    dashboardCenterTouchStartedAt = 0;
+    dashboardCenterTouchTriggered = false;
+    touchNavigationHeld = false;
+  }
      //----------------------
      //BLUETOOTH read
   while (BTSerial.available() > 0) {
@@ -514,6 +585,7 @@ void loop() {
       updateMeter(pidIndex, bt_message);  //update meter screen
       pidRead++;                          //for calculate pid/s
     }
+    bt_message = "";
     pidIndex++;  //point to next pid
     if (pidIndex >= maxpidIndex) {
       pidIndex = 0;  //back to pid 0

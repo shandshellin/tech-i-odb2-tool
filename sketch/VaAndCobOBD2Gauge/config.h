@@ -100,7 +100,7 @@ void animation() {//start field effect
   tft.drawString("* FW-\"VaandCobOBD2Gauge.bin\" * Image-\"mypic.jpg\"",0,100,2);
   tft.drawString("* Facebook : www.facebook.com/vaandcob",0,120,2);
   tft.setTextColor(TFT_YELLOW);
-  tft.drawString("  [ Manual ] ----------------[ Press button to exit ]",0,140,2);
+  tft.drawString("  [ Manual ] ------------[ Touch or press button to exit ]",0,140,2);
   tft.setTextColor(TFT_CYAN); 
   String txt = "[ "+serial_no+" ] BUILD : "+compile_date;
   tft.drawString(txt,0,0,2);
@@ -113,6 +113,7 @@ void animation() {//start field effect
   bk.setTextColor(TFT_BLACK,TFT_ORANGE);
 //loop draw Animation
   while (digitalRead(SELECTOR_PIN) == HIGH) {//exit if press button
+    if (getTouchNavigationAction() != TOUCH_NAV_NONE) break;
 
   //draw road
     bk.fillSprite(0x4228);//draw road
@@ -287,6 +288,122 @@ void loadMyPic() {
 }//loadmypic
 /*----------------*/
 
+bool readMode01Data(const String& pid, uint8_t& firstByte, uint8_t& secondByte, bool needsSecondByte) {
+  String response = getPID("01" + pid);
+  response.toUpperCase();
+  response.trim();
+
+  if (response.indexOf("NO DATA") >= 0 || response.indexOf("UNABLE TO CONNECT") >= 0) return false;
+
+  String responsePrefix = "41 " + pid;
+  int responseIndex = response.indexOf(responsePrefix);
+  if (responseIndex < 0) return false;
+
+  int index = responseIndex + responsePrefix.length();
+  uint8_t parsed[2] = { 0, 0 };
+  uint8_t parsedCount = 0;
+
+  while (index < response.length() && parsedCount < (needsSecondByte ? 2 : 1)) {
+    while (index < response.length() && !isxdigit(response[index])) index++;
+    if (index + 1 >= response.length() || !isxdigit(response[index + 1])) break;
+
+    parsed[parsedCount++] = strtol(response.substring(index, index + 2).c_str(), nullptr, 16);
+    index += 2;
+  }
+
+  if (parsedCount < (needsSecondByte ? 2 : 1)) return false;
+
+  firstByte = parsed[0];
+  secondByte = parsed[1];
+  return true;
+}
+
+void drawOptionalPidValue(uint8_t column, uint8_t row, const String& label, const String& value, const String& unit, bool available) {
+  const uint16_t width = 106;
+  const uint16_t height = 84;
+  const uint16_t x = column * 107;
+  const uint16_t y = 31 + row * 86;
+
+  tft.drawRect(x, y, width, height, TFT_DARKGREY);
+  tft.fillRect(x + 1, y + 1, width - 2, height - 2, TFT_BLACK);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.drawCentreString(label, x + width / 2, y + 5, 2);
+
+  if (available) {
+    tft.setTextColor(TFT_GREEN, TFT_BLACK);
+    tft.drawCentreString(value, x + width / 2, y + 30, 4);
+    tft.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+    tft.drawCentreString(unit, x + width / 2, y + 62, 2);
+  } else {
+    tft.setTextColor(TFT_ORANGE, TFT_BLACK);
+    tft.drawCentreString("UNAVAILABLE", x + width / 2, y + 37, 2);
+  }
+}
+
+void drawActionMenu(const String& leftLabel, const String& rightLabel, uint8_t selected) {
+  tft.fillRect(0, 210, 320, 30, TFT_BLACK);
+  tft.setTextColor(TFT_WHITE, selected == 0 ? TFT_BLUE : TFT_BLACK);
+  tft.drawCentreString(leftLabel, 79, 216, 2);
+  tft.setTextColor(TFT_WHITE, selected == 1 ? TFT_BLUE : TFT_BLACK);
+  tft.drawCentreString(rightLabel, 239, 216, 2);
+  tft.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+  tft.drawCentreString("Touch: LEFT PREV | CENTER SELECT | RIGHT NEXT", 159, 200, 1);
+}
+
+void showFuelTrimMafPage() {
+  uint8_t action = 0;
+  while (true) {
+    tft.fillScreen(TFT_BLACK);
+    tft.fillRectVGradient(0, 0, 320, 27, TFT_BLUE, TFT_NAVY);
+    tft.setTextColor(TFT_WHITE, TFT_NAVY);
+    tft.drawCentreString("Fuel / Trim / MAF", 159, 5, 2);
+
+    uint8_t A = 0;
+    uint8_t B = 0;
+    bool available = readMode01Data("2F", A, B, false);
+    drawOptionalPidValue(0, 0, "Fuel Level", available ? String(A * 100.0 / 255.0, 1) : "", "%", available);
+
+    available = readMode01Data("06", A, B, false);
+    drawOptionalPidValue(1, 0, "STFT Bank 1", available ? String((A - 128) * 100.0 / 128.0, 1) : "", "%", available);
+
+    available = readMode01Data("07", A, B, false);
+    drawOptionalPidValue(2, 0, "LTFT Bank 1", available ? String((A - 128) * 100.0 / 128.0, 1) : "", "%", available);
+
+    available = readMode01Data("08", A, B, false);
+    drawOptionalPidValue(0, 1, "STFT Bank 2", available ? String((A - 128) * 100.0 / 128.0, 1) : "", "%", available);
+
+    available = readMode01Data("09", A, B, false);
+    drawOptionalPidValue(1, 1, "LTFT Bank 2", available ? String((A - 128) * 100.0 / 128.0, 1) : "", "%", available);
+
+    available = readMode01Data("10", A, B, true);
+    drawOptionalPidValue(2, 1, "MAF Airflow", available ? String((A * 256.0 + B) / 100.0, 1) : "", "g/s", available);
+
+    drawActionMenu("Refresh", "Back", action);
+
+    bool refresh = false;
+    while (digitalRead(SELECTOR_PIN) == HIGH) {
+      checkCPUTemp();
+      autoDim();
+
+      TouchNavigationAction navigation = getTouchNavigationAction();
+      if (navigation == TOUCH_NAV_PREVIOUS || navigation == TOUCH_NAV_NEXT) {
+        action = 1 - action;
+        clickSound();
+        drawActionMenu("Refresh", "Back", action);
+      }
+      if (navigation == TOUCH_NAV_SELECT) {
+        clickSound();
+        refresh = action == 0;
+        delay(250);
+        break;
+      }
+      yield();
+    }
+
+    if (!refresh) return;
+  }
+}
+
 void listMenu(uint8_t choice) {
   //draw icon
   if (showsystem) tft.pushImage(0,35,25,25,switchon);//switchon image
@@ -307,8 +424,8 @@ void listMenu(uint8_t choice) {
     
   }//for i       
   tft.setTextColor(TFT_YELLOW,TFT_BLACK);
-  tft.drawString("Next Menu -> Press & Release Button",0,211,2);
-  tft.drawString("Select    -> Press & Hold Button",0,227,2);
+  tft.drawCentreString("Touch: LEFT PREV | CENTER SELECT | RIGHT NEXT",159,211,2);
+  tft.drawCentreString("Button: release next, hold select",159,227,2);
 }
 
 /*----------------*/
@@ -325,12 +442,26 @@ void configMenu() {//control configuration menu
     listMenu(select);
     delay(1000);
     while (true) {//loop check button press
+      TouchNavigationAction navigation = getTouchNavigationAction();
+      if (navigation == TOUCH_NAV_PREVIOUS) {
+        select = (select == 0) ? maxMenu - 1 : select - 1;
+        clickSound();
+        listMenu(select);
+        continue;
+      }
+      if (navigation == TOUCH_NAV_NEXT) {
+        select = (select + 1) % maxMenu;
+        clickSound();
+        listMenu(select);
+        continue;
+      }
+      bool touchSelect = navigation == TOUCH_NAV_SELECT;
 
-      if (digitalRead(SELECTOR_PIN) == LOW) {//button pressed   
-        if (!pressed) {
+      if (digitalRead(SELECTOR_PIN) == LOW || touchSelect) {//button pressed or centre touch
+        if (!pressed && !touchSelect) {
           pressed = true;//set press flag
           holdtimer = millis();  
-        } else if (holdtimer - millis() > 3000) {//hold 3 sec enter config menu
+        } else if (touchSelect || millis() - holdtimer > 3000) {//hold 3 sec or centre touch
 //----------  TOGGLE SHOW SYSTEM STATUS  -----------
           if (select == 0) {
             beepbeep();
@@ -345,12 +476,13 @@ void configMenu() {//control configuration menu
            clickSound(); 
            tft.fillRect(0,30,320,239,TFT_BLACK);
            loadMyPic();//load pic from sdcard to spiffs
-           tft.setTextColor(TFT_BLACK,TFT_WHITE);
-           tft.drawCentreString("[- Press button to exit -]",159,215,4); 
+           tft.setTextColor(TFT_WHITE,TFT_BLACK);
+           tft.drawCentreString("[- Touch screen or press button to exit -]",159,215,2); 
            while (digitalRead(SELECTOR_PIN) == HIGH) {
              //wait for button press to exit
              checkCPUTemp();
              autoDim();
+             if (getTouchNavigationAction() != TOUCH_NAV_NONE) break;
            }//while 
            clickSound();
            tft.fillScreen(TFT_BLACK);//clear screen
@@ -368,8 +500,8 @@ void configMenu() {//control configuration menu
            tft.setTextColor(TFT_CYAN,TFT_BLACK);
            tft.drawCentreString("Touch an icon to choose",159,125,4);
            tft.drawCentreString("firmware update method.",159,155,4);     
-           tft.setTextColor(TFT_BLACK,TFT_WHITE);
-           tft.drawCentreString("[- Press button to exit -]",159,215,4);    
+           tft.setTextColor(TFT_WHITE,TFT_BLACK);
+           tft.drawCentreString("Touch centre header or press button to exit",159,215,2);    
            delay(1000);    
            while (digitalRead(SELECTOR_PIN) == HIGH) {//wait for button press to exit       
               autoDim();
@@ -377,6 +509,7 @@ void configMenu() {//control configuration menu
               //touching
               uint16_t t_x = 0, t_y = 0; // To store the touch coordinates
               bool touched = getTouch(&t_x, &t_y);
+              if (touched && t_y < 30 && t_x > TOUCH_NAV_LEFT_END && t_x <= TOUCH_NAV_CENTER_END) break;
               if (touched && (t_y > 44) && (t_y < 104)) {
                 if ((t_x >= 56) && (t_x <116)) {
                   clickSound();
@@ -405,7 +538,7 @@ void configMenu() {//control configuration menu
             tft.drawCentreString("[ Warning Parameter Setting]",159,30,2);
             tft.drawFastHLine(0,50,320,TFT_RED);            
             tft.setTextColor(TFT_WHITE,TFT_RED);
-            tft.drawCentreString("[- Press button to Save & Exit -]",159,190,2);
+            tft.drawCentreString("Touch centre header or press button to Save & Exit",159,190,2);
             for (uint8_t i = 0;i<5;i++) //draw buttons
               tft.fillRoundRect(i*64,211,60,30,5,TFT_NAVY);
             tft.setTextColor(TFT_WHITE);    
@@ -431,6 +564,7 @@ void configMenu() {//control configuration menu
               //touching
               uint16_t t_x = 0, t_y = 0; // To store the touch coordinates
               bool touched = getTouch(&t_x, &t_y);
+              if (touched && t_y < 50 && t_x > TOUCH_NAV_LEFT_END && t_x <= TOUCH_NAV_CENTER_END) break;
               if (touched && (t_y > 211)) {
                 clickSound();
                 #ifdef SERIAL_DEBUG
@@ -492,22 +626,21 @@ void configMenu() {//control configuration menu
 A = 0x86;   
 #endif
 
-          if (A == 0xFF) {//Error reading MIL status
-           Serial.println(F("Error Reading MIL Status!"));
-           tft.setTextColor(TFT_WHITE,TFT_RED);
-           tft.drawCentreString("* Error Reading MIL Status! *",159,120,4);
+          if (A == 0xFF) {//No valid Mode 01 PID 01 response
+           Serial.println(F("MIL status unavailable: no valid 41 01 response."));
+           tft.setTextColor(TFT_ORANGE,TFT_BLACK);
+           tft.drawCentreString("MIL status unavailable",159,120,4);
            tft.setTextColor(TFT_LIGHTGREY,TFT_BLACK);
-           tft.drawCentreString("[ Please try again ]",159,148,4);
-           tft.setTextColor(TFT_BLACK,TFT_WHITE);
+           tft.drawCentreString("Please retry from the DTC menu",159,148,2);
+           tft.setTextColor(TFT_WHITE,TFT_BLACK);
            tft.drawCentreString("[- Press button to exit -]",159,215,4); 
-           beep();
           } else {
-            if (A == 0x00) {//41 01 00 = Mil is OFF No DTC
+            if ((A & 0x7F) == 0) {//41 01 00 = MIL is OFF, no DTCs
              tft.setTextColor(TFT_GREEN,TFT_BLACK);
              tft.drawCentreString("MIL is OFF - No DTC",159,120,4);
-             tft.setTextColor(TFT_BLACK,TFT_WHITE);
+             tft.setTextColor(TFT_WHITE,TFT_BLACK);
              tft.drawCentreString("[- Press button to exit -]",159,215,4); 
-            } else if (A >= 0x80) {//41 01 8x if A =>80h then MIL status ON else skip to NO MIL below
+            } else {
               Serial.print(F("A = "));Serial.println(A,HEX);                   
       //  #2 get Raw Diagnostic Troulbe Code from ELM327
             //(for 1 dtc)43 06 00 7D 
@@ -532,7 +665,7 @@ dtcRead = "00E 0: 43 06 00 7D C6 93 1: 01 08 C6 0F 02 E9 02 2: E0 CC CC CC CC CC
                 tft.drawCentreString("* Error Reading DTCs! *",159,120,4);
                 tft.setTextColor(TFT_LIGHTGREY,TFT_BLACK);
                 tft.drawCentreString("[ Please try again ]",159,148,4);
-                tft.setTextColor(TFT_BLACK,TFT_WHITE);
+                tft.setTextColor(TFT_WHITE,TFT_BLACK);
                 tft.drawCentreString("[- Press button to exit -]",159,215,4); 
                 beep();
               } else {
@@ -581,7 +714,7 @@ dtcRead = "00E 0: 43 06 00 7D C6 93 1: 01 08 C6 0F 02 E9 02 2: E0 CC CC CC CC CC
                 no_of_dtc++;//keep real no of dtc in no_of_dtc  
               }//for
               tft.setTextColor(TFT_RED,TFT_BLACK);
-              String txt = "MIL is ON - No of DTCs = "+String(no_of_dtc);
+              String txt = ((A & 0x80) ? "MIL is ON" : "MIL is OFF") + String(" - No of DTCs = ") + String(no_of_dtc);
               tft.drawCentreString(txt,159,58,4);
               tft.drawFastHLine(0,85,320,TFT_WHITE);
               Serial.printf("\nNo of DTCs = %d\n",no_of_dtc);
@@ -598,37 +731,34 @@ dtcRead = "00E 0: 43 06 00 7D C6 93 1: 01 08 C6 0F 02 E9 02 2: E0 CC CC CC CC CC
                 tft.setTextColor(TFT_BLUE,TFT_BLACK);   
                 tft.drawString(dtcList[i+3].c_str(),240,92+30*round(i/4),4);
               }
-        //#5 show clear MIL button
-               tft.setTextColor(TFT_BLACK,TFT_WHITE);
-               tft.drawRightString("[Press button to exit]",319,220,2); 
-               tft.fillRoundRect(0,215, 127, 24, 12, TFT_RED);
-               tft.setTextColor(TFT_WHITE);
-               tft.drawCentreString("Clear MIL",63,217,4); 
             }//else !error_read//
            }//else if A >0x80
           }//else if error_ent>5 
 
+           uint8_t dtcAction = 0;
+           drawActionMenu("Fuel / Trim / MAF", "Back", dtcAction);
+
            while (digitalRead(SELECTOR_PIN) == HIGH) { //wait for button press to exit
              checkCPUTemp();
              autoDim();
-             //CLEAR MIL
-             if (no_of_dtc !=0) {//if there is dtc, touch checking for clear MIL
-             uint16_t t_x = 0, t_y = 0; // To store the touch coordinates
-             bool touched = getTouch(&t_x, &t_y);
+             TouchNavigationAction navigation = getTouchNavigationAction();
              #ifdef SERIAL_DEBUG
-              Serial.printf("%d - %d\n",t_x,t_y);
+              Serial.printf("DTC touch action: %d\n", navigation);
              #endif
-             if (touched && (t_y > 225) && (t_x < 127)) {//touch clear MIL button
+             if (navigation == TOUCH_NAV_PREVIOUS || navigation == TOUCH_NAV_NEXT) {
+               dtcAction = 1 - dtcAction;
                clickSound();
-               BTSerial.print("04\r");//clear MIL 04->7F 04 78  7F 04 78
-               tft.setTextColor(TFT_BLACK,TFT_GREEN);
-               tft.drawCentreString("* Successful Clear MIL *",159,120,4);
-               Serial.println(F("* Successful Clear MIL *"));
-               beepbeep();
-               delay(3000);
-               break;
-              }//if touch   
-            }//if (no_of_dtc)
+               drawActionMenu("Fuel / Trim / MAF", "Back", dtcAction);
+             }
+             if (navigation == TOUCH_NAV_SELECT) {
+               clickSound();
+               if (dtcAction == 0) {
+                 showFuelTrimMafPage();
+                 drawActionMenu("Fuel / Trim / MAF", "Back", dtcAction);
+               } else {
+                 break;
+               }
+              }
             yield();
            }//while button exit
            tft.fillRect(0,28,320,239,TFT_BLACK);
@@ -646,8 +776,8 @@ dtcRead = "00E 0: 43 06 00 7D C6 93 1: 01 08 C6 0F 02 E9 02 2: E0 CC CC CC CC CC
            tft.drawString("If gauge turn off while the engnine is running",10,85,2);
            tft.drawString("Please lower down the voltage",10,105,2);
            tft.drawString("Volt",220,135,4);
-           tft.setTextColor(TFT_BLACK,TFT_WHITE);
-           tft.drawCentreString("[- Press button to exit -]",159,180,4); 
+           tft.setTextColor(TFT_WHITE,TFT_BLACK);
+           tft.drawCentreString("Touch centre header or press button to exit",159,180,2); 
            for (uint8_t i = 0;i<5;i++) //draw buttons
               tft.fillRoundRect(i*64,211,60,30,5,TFT_NAVY);
            tft.setTextColor(TFT_WHITE);    
@@ -664,6 +794,7 @@ dtcRead = "00E 0: 43 06 00 7D C6 93 1: 01 08 C6 0F 02 E9 02 2: E0 CC CC CC CC CC
             autoDim();
             uint16_t t_x = 0, t_y = 0; // To store the touch coordinates
             bool touched = getTouch(&t_x, &t_y);
+            if (touched && t_y < 50 && t_x > TOUCH_NAV_LEFT_END && t_x <= TOUCH_NAV_CENTER_END) break;
             if (touched && (t_y > 211)) {
               clickSound();
               #ifdef SERIAL_DEBUG

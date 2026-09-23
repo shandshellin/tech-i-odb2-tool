@@ -370,6 +370,8 @@ void initScreen() {
       break;  
   }  //switch page
 
+  tft.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+  tft.drawCentreString("Touch: PREV | HOLD 3 SEC MENU | NEXT", 159, 0, 1);
 }  //initscreen
 /*-------------------------------*/
 
@@ -441,6 +443,9 @@ if (pidList[pid] == "0142") { //pis = 010C engine speed RPM
 //coolant volt oiltemp vaporpressure TFT Load
 // {"01051","01421","015C1","01321","221E1C1","01041"};
 void updateMeter(uint8_t pidNo, String response) {  //update parameter on screen
+  response.trim();
+  if (response.indexOf("NO DATA") >= 0 || response.indexOf("UNABLE TO CONNECT") >= 0) return;
+
   // Array data -> { Label , unit, pid, fomula, min, max, ,skip, digit }
   String label = pidConfig[pidInCell[layout][pidNo]][0];
   //String unit = pidConfig[pidInCell[layout][pidNo]][1];
