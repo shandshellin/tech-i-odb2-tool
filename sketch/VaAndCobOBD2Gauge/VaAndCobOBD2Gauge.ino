@@ -300,6 +300,9 @@ void setup() {
 
   //init communication
   Serial.begin(115200);
+  if (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_EXT1) {
+    Serial.println(F("Wake source: touchscreen."));
+  }
   //memory check
   psramInit();
   Serial.println(F("\n---------------------------------------\n"));

@@ -434,6 +434,7 @@ if (pidList[pid] == "0142") { //pis = 010C engine speed RPM
     tft.fillScreen(TFT_BLACK);
     tft.writecommand(0x10); //TFT sleep
     esp_sleep_enable_ext0_wakeup(GPIO_NUM_27,LOW); //wake when button pressed
+    esp_sleep_enable_ext1_wakeup(1ULL << XPT2046_IRQ, ESP_EXT1_WAKEUP_ALL_LOW); //wake when touchscreen IRQ is pressed
     esp_deep_sleep_start();//sleep shutdown backlight auto off with esp32
 
     }//if engine_off_count>20
